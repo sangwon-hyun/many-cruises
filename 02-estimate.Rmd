@@ -1,0 +1,843 @@
+---
+title: Model estimates in multiple cruises.
+date: "Compiled at `r format(Sys.time(), '%Y-%m-%d %H:%M:%S', tz = 'UTC')` UTC"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+---
+
+```{r global_options, include=TRUE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(fig.width=14, fig.height=8, echo=TRUE, eval=TRUE, cache=TRUE,
+                      warning=FALSE, message=FALSE,
+                      cache.lazy = FALSE)
+
+## Load packages
+library(tidyverse)
+library(knitr)
+library(here)
+library(ggplot2)
+library(flowmix)
+
+
+## Setup some plotting details
+coul <- colorRampPalette(RColorBrewer::brewer.pal(8, "RdYlBu"))(25)
+source("02-helpers.R")
+
+## Some extra stuff, from: https://github.com/haozhu233/kableExtra/issues/265
+options(kableExtra.auto_format = F)
+```
+
+ 
+```{r directories}
+## Setup locations
+base = "02-estimate"
+here::i_am("02-estimate.Rmd")
+knitr::opts_chunk$set(fig.path = here::here("data", base, 'figures/'))
+outputdir = here::here("data", base)
+datadir = here::here("data", base)
+outputdir_cytograms = here::here("data", "01-cytograms")
+if(!dir.exists(outputdir)) dir.create(outputdir)
+```
+
+# Summary
+
+This document compiles and showcases the estimated models -- results from
+large-scale computation that occurred in a server.
+
+The experiments were done using these settings:
+
+* Number of clusters: default to 10.
+* Size of time blocks: blocks of 5 hours
+  + Block 1 is: 1,...,5 
+  + Block 2 is 6,..., 10. And so forth.
+  + Then, CV is done by using blocks {1, 6, 11, ..} as fold 1, {2, 7, 12, ..} as
+    fold 2, and so on.
+* The "radius" for the cluster means over time: a value of 1 seems to work well.
+
+Here are some notes on computation:
+
+* For KM1508, one iteration costs 2 or 2.5 seconds per iteration.
+* On 500 cores, entire CV can be done in 15-30 minutes.
+* Subsampling will take (100 subsamples x 30 min = 50 hrs = 1 day).
+
+# Experiments
+
+## Run scripts on server 
+
+For now, the scripts are placed on the USC CARC server. Two of the most relevant
+files:
+
+* `~/scripts/flowmixapp/run-main.slurm` which calls
+* `~/scripts/flowmixapp/main.R`.
+
+Note to self: these scripts will eventually be made available directly in this
+repository.
+
+## Download model results
+
+ONLY download the `summary.RDS` file.
+
+```{sh, eval = FALSE}
+all_cruise_id="KM1508 KM1512 KM1513 KOK1515 KM1518 KM1601 KM1602 KOK1604 KOK1606 KOK1607 KOK1608 KOK1609 MGL1704 KM1708 KM1709 KM1713 KM1717  KOK1801 KM1802 KOK1803 FK180310-1 FK180310-2"
+for cruise_id in 
+do
+  echo $cruise_id
+  from=sangwonh@discovery.usc.edu:projdir/output/flowmixapp/data/02-estimate/$cruise_id/summaries/*.RDS
+  to=/home/sangwonh/repos/flowmixapp/data/02-estimate/$cruise_id/summaries/.
+  mkdir -p  $to
+  rsync -auv $from $to
+done
+```
+
+# Cluster labels
+
+First, here are some hand-labeled cluster labels:
+
+```{r cluster-labels, echo = FALSE}
+## All mappings 
+maps =  list(KM1508  = c(pro = c(10,NA), small = 9,  syn = 7,  pico1_ = c(6  ), pico2_ = c(2,NA), pico3_ = c(NA), pico4_ = c(NA), croco =NA, bead = 1, rest1_ = c(4,NA), rest2_ = c(8), bg = c(3,5)),
+             KM1512  = c(pro = c(10,NA), small = 9,  syn =NA,  pico1_ = c(7  ), pico2_ = c(8,NA), pico3_ = c(NA), pico4_ = c( 1), croco = 3, bead = 6, rest1_ = c(2,NA), rest2_ = c(4), bg = c(5)  ),
+             KM1513  = c(pro = c(8, NA), small =10,  syn =NA,  pico1_ = c(7  ), pico2_ = c(6,NA), pico3_ = c(NA), pico4_ = c(NA), croco = 5, bead = 1, rest1_ = c(3,NA), rest2_ = c(9,4), bg = c(2)),
+             KOK1515 = c(pro = c( 7, 3), small = 9,  syn =NA,  pico1_ = c(10 ), pico2_ = c(2,NA), pico3_ = c(NA), pico4_ = c(NA), croco = 5, bead =NA, rest1_ = c(1,NA), rest2_ = c(8), bg = c(6,4)),
+
+             KM1518  = c(pro = c(10,NA), small = 6,  syn = 3,  pico1_ = c(7  ), pico2_ = c(1,NA), pico3_ = c(NA), pico4_ = c(NA), croco =NA, bead = 4, rest1_ = c(2,NA), rest2_ = c(9), bg = c(8,5)),
+             KM1601  = c(pro = c( 4,10), small = 7,  syn = 5,  pico1_ = c(3  ), pico2_ = c(2,NA), pico3_ = c(NA), pico4_ = c(NA), croco =NA, bead = 6, rest1_ = c(1,NA), rest2_ = c(9), bg = c(8)),
+             KM1602  = c(pro = c( 7, 9), small = 8,  syn =NA,  pico1_ = c(4  ), pico2_ = c(3,NA), pico3_ = c(NA), pico4_ = c(NA), croco =NA, bead = 6, rest1_ = c(2, 1), rest2_ =c(10), bg = c(5)),
+             KOK1604  = c(pro = c(10,NA), small = 2,  syn =NA, pico1_ = c(6  ), pico2_ = c(1,NA), pico3_ = c( 9), pico4_ = c(NA), croco =NA, bead = 4, rest1_ = c(7, 5), rest2_ = c(8), bg = c(3)),
+
+             KOK1606 = c(pro = c( 9,NA), small =NA,  syn =10,  pico1_ = c(5  ), pico2_ = c(8,NA), pico3_ = c(7),  pico4_ = c(NA), croco =NA, bead =  4, rest1_ = c(1,NA), rest2_ = c(6), bg = c(3,2)),
+             KOK1607 = c(pro = c(10,NA), small = 8,  syn = 9,  pico1_ = c(4  ), pico2_ = c(3,NA), pico3_ = c(NA), pico4_ = c(NA), croco =NA, bead =  5, rest1_ = c(6, 7), rest2_ = c(1), bg = c(2)),
+             KOK1608 = c(pro = c(10,NA), small =NA,  syn =NA,  pico1_ = c(3  ), pico2_ = c(5, 1), pico3_ = c(NA), pico4_ = c(NA), croco = 2, bead =  4, rest1_ = c(6, 7), rest2_ = c(9), bg = c(8)),
+             KOK1609 = c(pro = c( 7,NA), small =NA,  syn = 5,  pico1_ = c(3  ), pico2_ = c(1,NA), pico3_ = c(NA), pico4_ = c(NA), croco = 4, bead = NA, rest1_ = c(9, 2), rest2_ = c(6), bg = c(10,8)),
+
+             ## Non-pilot cruises go here.
+             MGL1704 = c(pro = c(10,NA), small =NA,  syn = 3,  pico1_ = c(9  ), pico2_ = c(1,NA), pico3_ = c( 6), pico4_ = c(NA), croco =NA, bead = NA, rest1_ = c(4, 7), rest2_ = c(8), bg = c(5, 2)),
+             KM1708  = c(pro = c( 8,NA), small =NA,  syn =NA,  pico1_ = c(9  ), pico2_ = c(7,NA), pico3_ = c(NA), pico4_ = c( 5), croco = 3, bead =  2, rest1_ = c(6,NA), rest2_ = c(10),bg = c(4, 1)),
+
+             KM1709  = c(pro = c( 5,NA), small =NA,  syn =NA,  pico1_ = c(6  ), pico2_ = c(3, 7), pico3_ = c(NA), pico4_ = c(NA), croco = 4, bead = NA, rest1_ = c(9, 8), rest2_ = c(2), bg = c(10,1)),
+             KM1713  = c(pro = c( 9,NA), small =NA,  syn =NA,  pico1_ = c(8 ), pico2_ = c(4, 7), pico3_ = c(NA), pico4_ = c(NA), croco = 1, bead = NA, rest1_ = c(2, 3,  5), rest2_ = c(10), bg = c(6)), 
+
+             KM1717  = c(pro = c( 8,NA), small =NA,  syn = 9,  pico1_ = c(6  ), pico2_ = c(7,NA), pico3_ = c( 1), pico4_ = c(NA), croco = 2, bead = NA, rest1_ = c(3, 5), rest2_ = c(4), bg = c(NA,10)),
+             KM1802 = c(pro = c( 9,NA), small =10,  syn = 4,   pico1_ = c(5  ), pico2_ = c(6,NA), pico3_ = c(NA), pico4_ = c(NA), croco =NA, bead =  2, rest1_ = c(1,NA), rest2_ = c(8), bg = c(3, 7)),
+             KOK1801 = c(pro = c( 9,NA), small =NA,  syn =NA,  pico1_ = c(4  ), pico2_ = c(3, 6), pico3_ = c(NA), pico4_ = c(NA), croco =NA, bead =  2, rest1_ = c(1, 5), rest2_ = c(10),bg = c(7, 8)),
+
+             KOK1803 = c(pro = c( 10,8), small = 7,  syn = 5,  pico1_ = c(3  ), pico2_ = c(1,NA), pico3_ = c(NA), pico4_ = c(NA), croco =NA, bead =  4, rest1_ = c(2,NA), rest2_ = c(9),bg = c(6,NA)), ## not run yet.
+
+        "FK180310-1" = c(pro = c( 8,NA), small =NA,  syn = 9,  pico1_ = c(10 ), pico2_ = c(7, 2), pico3_ = c(NA), pico4_ = c(NA), croco =NA, bead =  5, rest1_ = c(6, 4), rest2_ = c(3 ),bg = c(1,NA)),
+        "FK180310-2" = c(pro = c( 9,NA), small =NA,  syn = 5,  pico1_ = c(10 ), pico2_ = c(1,NA), pico3_ = c(NA), pico4_ = c(NA), croco =NA, bead =  3, rest1_ = c(2, 7), rest2_ = c(8 ),bg = c(4, 6))
+             )
+             
+mapmat = maps %>% bind_rows(.id = "cruise_id") %>% as_tibble()
+mapmat_long = mapmat %>% pivot_longer(!cruise_id)
+numclust = 10
+mapmat %>% select(-cruise_id) %>% as.matrix() %>% apply(1, function(a){
+  assertthat::assert_that(all(1:numclust == sort(a)))
+}) 
+knitr::kable(mapmat) 
+```
+
+
+# Estimated $\pi$ and $\mu$ {.tabset}
+
+Next, we'll make videos of model, and plots \& tables of coefficients.
+
+```{r, load-data, results = 'asis', fig.width=15, fig.height=5}
+all_cruise_id = c(c("KM1508", "KM1512", "KM1513",
+                    "KOK1515", "KM1518"),
+                  c("KM1601", "KM1602", "KOK1604", "KOK1606"),
+                  c("KOK1607", "KOK1608", "KOK1609"), 
+                  c("MGL1704", "KM1708", "KM1709", "KM1713", "KM1717", "KOK1801", "KM1802"), 
+                  c("KOK1803",  "FK180310-1", "FK180310-2"))
+
+## Too little data in 1805
+## c("KM1712"), ## Need to download covariates, bin properly and run again.
+
+numclust = 10
+
+## Loop over all cruise IDs
+for(cruise_id in all_cruise_id){
+  cat('## Model', cruise_id,' \n')
+
+  ## Cluster labels
+  if(cruise_id %in% mapmat$cruise_id){
+    one_mapmat_long = mapmat_long %>% filter(cruise_id == !!(cruise_id)) %>% arrange(value) %>% na.omit()
+    stopifnot((one_mapmat_long %>% pull(value)) == (1:numclust))
+    cluster_labels = one_mapmat_long %>% pull(name)
+  } else {
+    cluster_labels = NULL
+  }
+
+  ## Load model
+  bestres = load_model(cruise_id)
+
+  ## Load cytogram data.
+  filename = paste0(cruise_id, "-datobj.RDS")
+  ybin_obj = readRDS(file = file.path(outputdir_cytograms, cruise_id, "data", filename))
+  ylist = ybin_obj$ylist
+  countslist = ybin_obj$biomass_list
+  
+  ## Create individual frames
+  dir.create(file.path(file.path(outputdir, cruise_id, "viz")))
+  TT = length(ylist)
+  for(tt in 1:TT){
+    g = plot_2d_threepanels(bestres, ylist, countslist, tt = tt,
+                            labels = cluster_labels,
+                            colours = c("white", "blue"),
+                            cruise_id = cruise_id)
+
+    ## Save one for the books
+    if(tt == 1){
+      ## oneplotfile = file.path(datadir, cruise_id, "viz", paste0(tt, ".jpeg"))
+      ## ggsave(file = oneplotfile, width = 12, height = 4, units = "in", dpi = 300, g)
+      plot(g)
+    }
+
+    ## Save one for the books
+    filename = paste0("labeled-", tt, ".png")
+    plotfile = file.path(file.path(outputdir, cruise_id, "viz"), filename)
+    if(file.exists(plotfile)) next
+    ggsave(file = plotfile,
+           width = 12, height = 4,
+           units = "in", dpi = 300, g)
+  }
+
+  ## Make video
+  videofile = file.path(outputdir, cruise_id, "viz", "3d-model.mp4")
+  if(!file.exists(videofile)){
+    cmd_change_directory <- paste0("cd ", file.path(file.path(outputdir, cruise_id, "viz")))
+    cmd_make_movie <- "ffmpeg -y -framerate 3 -i labeled-%d.png  3d-model.mp4"
+    system(paste0(cmd_change_directory, "; ", cmd_make_movie))
+  }
+
+  ## Plot cluster probabilities
+  times = names(ylist)
+  plot_prob_ggplot(bestres, cluster_labels, times) %>% print()
+  
+  ## Embed video (not doing this anymore, due to large file size)
+  if(FALSE){
+    cat(paste0('<video width="1280" height="720" controls>  <source src="',
+               videofile,
+               '" type="video/mp4"> </video>'))
+  }
+
+  ## ## Instead, we'll just embed one frame
+  ## cat(paste0("![](", file.path(".", 
+  ##                              "data",
+  ##                              "02-estimate",
+  ##                              cruise_id,
+  ##                              "viz",
+  ##                              "1.jpeg"),
+             ## ")"))
+  cat('\n\n')
+}
+```
+ 
+
+# Estimated $\alpha and $\beta$ coefficients {.tabset}
+
+```{r viz_coef, fig.width=12, fig.height=12, results='asis'}
+## These are the original /ordered/ labels
+orig_cluster_labels = mapmat %>% colnames()
+
+## Setup (assuming |ylist| exists) 
+cytogram_dimnames = ylist[[1]] %>% colnames()
+
+for(cruise_id in all_cruise_id){
+  cat('## Tables', cruise_id,' \n')
+
+  ## Cluster labels
+  one_mapmat_long = mapmat_long %>% filter(cruise_id == !!(cruise_id)) %>% arrange(value) %>% na.omit()
+  if(nrow(one_mapmat_long) == 0) next
+  stopifnot((one_mapmat_long %>% pull(value)) == (1:numclust))
+  cluster_labels = one_mapmat_long %>% pull(name)
+
+  ## Load model
+  bestres = load_model(cruise_id)##, cluster_labels)
+  
+  ## Plot and print alpha coefficients
+  p = print_alpha(bestres, type = "plot", cluster_labels, orig_cluster_labels)
+  print(p)
+  tab = print_alpha(bestres, type = "table", cluster_labels, orig_cluster_labels) ##%>% print()
+  print(tab)
+ 
+  ## Plot and print beta coefficients
+  p = plot_beta(bestres, cluster_labels, orig_cluster_labels, cytogram_dimnames)
+  plot(p)
+  p = print_beta(bestres, cluster_labels, orig_cluster_labels, cytogram_dimnames)
+  print(p)
+
+  cat('\n\n')
+}
+```
+
+
+# Some diagnostics {.tabset}
+
+You can never be too careful! Two things are shown, for each cruise:
+
+* The matrix of CV scores (shown as a heatmap).
+
+* Sparsity of all models (shown as tables).
+ 
+  * The row names show the values of $\lambda_\alpha$.
+  * The column names show the values of $\lambda_\alpha$.
+
+```{r diagnostics, fig.width=8, fig.height=8, results='asis'}
+for(cruise_id in all_cruise_id){
+  cat('##', cruise_id,' \n')
+
+  ## Show the CV
+  summarydir = file.path(outputdir, cruise_id, "summaries")
+  cvres = readRDS(file.path(summarydir, "summary-orig.RDS"))
+  mat = cvres$cvscore.mat
+  mat %>% drawmat_precise() %>% plot() ##col = c("blue", "blue", "red"))
+
+  ## Print the sparsity of the model coefficients.
+  alphadf = betadf = cvres$cvscore.mat
+  for(ii in 1:10){
+    for(jj in 1:10){
+      obj = cvres$bestreslist[[paste0(ii, "-", jj)]]
+      betas = do.call(cbind, lapply(obj$beta, function(beta)beta[-1,]))
+      alpha =obj$alpha[ ,-1]
+      betadf[ii,jj] = length(betas) - sum(betas==0)
+      alphadf[ii,jj] = length(alpha) - sum(alpha==0)
+    }
+  }
+  knitr::kable(alphadf, caption = "Number of nonzero alpha coeffs") %>% print() ## title "alpha"
+  knitr::kable(betadf, caption = "Number of nonzero beta coeffs")  %>% print()## title "beta"
+  cat('\n\n')
+}
+```
+
+
+# Subsampled models
+
+Download the results from the server:
+
+```{sh, eval=FALSE}
+all_cruise_id="KM1508 KM1512 KM1513 KOK1515 KM1518 KM1601 KM1602 KOK1604 KOK1606 KOK1607 KOK1608 KOK1609 MGL1704 KM1708  KM1712 KM1713 KM1717  KOK1801 KM1802 KOK1803 FK180310-1 FK180310-2"
+for cruise_id in all_cruise_id
+do
+	echo $cruise_id
+	from=sangwonh@discovery.usc.edu:projdir/output/flowmixapp/data/02-estimate/$cruise_id/summaries/*
+	to=/home/sangwonh/repos/flowmixapp/data/02-estimate/$cruise_id/summaries/.
+	mkdir -p  $to
+	rsync -auv $from $to
+done
+```
+
+Now, we'll load the summaries and aggregate the information from all experiments
+-- original *and* subsampling replicates. 
+
+This creates summary files named e.g.  `KM1601-grand-summary.RDS`.
+
+```{r grand-summarize, eval = FALSE}
+all_cruise_id = c("KM1508",
+                  "KM1512",
+                  ## "KM1513", ## This has fold 4 missing altogether; why is this?
+                  "KOK1515",
+                  "KM1518",
+                  "KM1601",
+                  "KM1602",
+                  "KOK1604",
+                  "KOK1606",
+                  "KOK1607",
+                  "KOK1608",
+                  "KOK1609", ##"KOK1608a", , "KOK1609a"
+                  ## c("KM1712"), ## Need to download covariates, bin properly and run again.
+                  "MGL1704", "KM1708",
+                  "KM1709", ## No subsampling yet
+                  "KM1713", ## No subsampling yet
+                  "KM1717", "KOK1801", "KM1802", ## These are new.
+                  "KOK1803",  "FK180310-1", "FK180310-2") ## "KM1805" ## Too little data in 1805
+
+for(cruise_id in all_cruise_id){
+  tryCatch({
+  subsample_summarize(cruise_id = cruise_id,
+                      save = TRUE,
+                      nsim = 100,
+                      outputdir = "~/projdir/output/flowmixapp/data/02-estimate",
+                      outputdir_cytograms = "~/projdir/output/flowmixapp/data/01-cytograms",
+                      verbose = TRUE)
+  }, error = function(e){
+    print("error occurred!")
+    return(NULL)
+  })
+}
+```
+
+## Beta coefficients and stability {.tabset}
+
+```{r beta-stab, results="asis"}
+varnames = c("diam", "chl", "pe")
+numclust = 10
+dimdat = 3
+for(cruise_id in all_cruise_id){
+
+  ## Read in the summary over all subsampled models.
+  filename = paste0(cruise_id, "-grand-summary.RDS")
+  summarydir = file.path(outputdir, cruise_id, "summaries")
+  if(!file.exists(file.path(summarydir, filename))) next
+  obj = readRDS(file = file.path(summarydir, filename))
+
+  ## Cluster labels
+  one_mapmat_long = mapmat_long %>% filter(cruise_id == !!(cruise_id)) %>% arrange(value) %>% na.omit()
+  stopifnot((one_mapmat_long %>% pull(value)) == (1:10))
+  cluster_labels = one_mapmat_long %>% pull(name)
+
+  for(iclust in 1:numclust){
+    ## cat("###", cruise_id, paste0("clust-", iclust))
+    cat("###", cruise_id, cluster_labels[iclust])
+
+    threetables = lapply(1:dimdat, function(idim){
+      pipeline = function(a, varname){
+        a %>% as.data.frame() %>%  magrittr::set_colnames(varname) %>% 
+        tibble::rownames_to_column(var="variable")  %>% as_tibble()
+      }
+      stab = obj$beta_freq %>% .[iclust, ,idim] %>% pipeline("stab")
+      coef = obj$origres$beta %>% .[[iclust]] %>% .[,idim] %>% pipeline("est")
+      combined = full_join(stab, coef) %>%
+        arrange(-stab) %>%
+        mutate(stab = print_sparsify(stab),
+               est = print_sparsify(est)) %>%
+        filter(variable != "intp") %>%
+        magrittr::set_colnames(c("variable", paste0(varnames[idim], "_stab"),
+                                 paste0(varnames[idim], "_est")))
+      return(combined)
+    })
+
+    ## Combine and kable-ify
+    threetables %>% do.call(cbind, .) %>% knitr::kable(caption="beta coefficients") %>% print()
+      cat(fill = TRUE)
+  }
+}
+```
+
+
+## Alpha coefficients and stability {.tabset}
+
+```{r alpha-stab, results = "asis"}
+numclust = 10
+for(cruise_id in all_cruise_id){
+
+  ## Read in the summary over all subsampled models.
+  filename = paste0(cruise_id, "-grand-summary.RDS")
+  summarydir = file.path(outputdir, cruise_id, "summaries")
+  if(!file.exists(file.path(summarydir, filename))) next
+  obj = readRDS(file = file.path(summarydir, filename))
+
+  ## Cluster labels
+  one_mapmat_long = mapmat_long %>% filter(cruise_id == !!(cruise_id)) %>% arrange(value) %>% na.omit()
+  stopifnot((one_mapmat_long %>% pull(value)) == (1:10))
+  cluster_labels = one_mapmat_long %>% pull(name)
+
+  for(iclust in 1:numclust){
+    ## cat("###", cruise_id, paste0("clust-", iclust))
+    cat("###", cruise_id, cluster_labels[iclust])
+    
+    ## Obtain and combine coefficient estimates and stability estimates
+    pipeline = function(a, varname){
+      a %>% as.data.frame() %>%  magrittr::set_colnames(varname) %>% 
+        tibble::rownames_to_column(var="variable")  %>% as_tibble()
+    }
+    stab = obj$alpha_freq[,iclust] %>% pipeline("stab")
+    coef = obj$orig$alpha[iclust,] %>% pipeline("est")
+    combined = full_join(stab, coef) %>% arrange(-stab)
+    
+    ## Sparsify
+    combined = combined %>% mutate(stab = print_sparsify(stab),
+                                   est = print_sparsify(est)) %>%
+      filter(variable != "intp") 
+    
+    ## Kable-ify
+    combined %>% kable(caption="alpha coefficients") %>% print()
+    cat(fill = TRUE)
+  } 
+}
+```
+
+
+# Make three data frames
+
+Now, we'll be making several "long format" data tables -- of the data and of the
+model estimates -- to use for further data analysis.
+
+The objects are called:
+
+* `coef_long`: $\alpha$ and $\beta$ coefficient values, as well as stability estimates.
+
+* `pred_long`: $\mu$ and $\pi$ estimates.
+
+* `sigma_long`: Covariance ($\Sigma$) estimates.
+
+* `X_long`: Environmental covariates.
+
+* `dat_long`: Binned cytometry data.
+
+
+**Coefficients (and stability).** The columns are:
+
+  + cruise
+  + "variable": covariate (can also be "intercept")
+  + population
+  + type ("beta_diam", "beta_chl", "beta_pe", "alpha")
+  + coefficient (the value)
+  + stability (the value)
+
+
+
+```{r gather-subsampling}
+objlist = sapply(all_cruise_id, function(cruise_id){
+
+  ## Read in the summary over all subsampled models.
+  filename = paste0(cruise_id, "-grand-summary.RDS")
+  summarydir = file.path(outputdir, cruise_id, "summaries")
+  if(!file.exists(file.path(summarydir, filename))){
+    print(cruise_id)
+    print("didn't have grand summary file")
+    return(NULL)
+  }
+  obj = readRDS(file = file.path(summarydir, filename))
+  return(obj)
+
+}, simplify = FALSE, USE.NAMES = TRUE)
+```
+
+
+```{r coef_long}
+coef_long = lapply(all_cruise_id, function(cruise_id){
+
+  ## Cluster labels
+  one_mapmat_long = mapmat_long %>% filter(cruise_id == !!(cruise_id)) %>% arrange(value) %>% na.omit()
+  stopifnot((one_mapmat_long %>% pull(value)) == (1:10))
+  cluster_labels = one_mapmat_long %>% pull(name)
+
+
+  if(!is.null(objlist[[cruise_id]])){
+    ## Alpha frequencies
+    alpha_freq = objlist[[cruise_id]] %>% .$alpha_freq
+    colnames(alpha_freq) = cluster_labels
+    alpha_freq_long = alpha_freq %>% as.data.frame() %>% rownames_to_column("variable") %>% as_tibble() %>%
+      pivot_longer(!variable, names_to = "population", values_to = "value") %>%
+      add_column(type = "alpha")
+  
+    ## Beta frequencies
+    beta_freq_long = lapply(1:3, function(idim){
+      beta_array = objlist %>% .[[cruise_id]] %>% pluck("beta_freq") %>% .[,,idim] %>% t()
+      colnames(beta_array) = cluster_labels
+      one_long_beta = beta_array %>% as.data.frame() %>%
+        rownames_to_column("variable")  %>% pivot_longer(!variable, names_to = "population") %>%
+        add_column(type = paste0("beta_", cytogram_dimnames[idim]))
+    }) %>% bind_rows() 
+  
+  
+    ## Combine all frequencies
+    freq_long = bind_rows(alpha_freq_long,
+                          beta_freq_long)
+
+  } else {
+    freq_long = NULL
+  }
+
+  ## Beta coefficient values
+  bestres = load_model(cruise_id)
+  beta = bestres$beta
+  names(beta) = cluster_labels
+  beta = lapply(beta, function(onebeta){
+    colnames(onebeta) = paste0("beta_", cytogram_dimnames); return(onebeta)
+  })
+  beta_long = lapply(cluster_labels, function(cluster_label){
+    beta %>% .[[cluster_label]] %>% as.data.frame() %>%
+      rownames_to_column("variable") %>% pivot_longer(!variable, names_to = "type") %>%
+      add_column(population = cluster_label)
+  }) %>% bind_rows()
+
+  ## Alpha coefficients 
+  alpha = bestres$alpha %>% t()
+  colnames(alpha) = cluster_labels
+  alpha_long = alpha %>% as.data.frame() %>%
+    rownames_to_column("variable") %>%
+    pivot_longer(!variable, names_to = "population") %>% 
+    add_column(type = "alpha")
+
+  ## Combine all coefficients
+  coef_long = bind_rows(alpha_long,
+                        beta_long)
+
+  if(is.null(freq_long)) freq_long = coef_long[c(),]
+
+  ## Combine everything
+  combined = full_join(freq_long, coef_long, by=c("variable", "type", "population"), suffix = c("_stab", "_coef")) %>%
+    select(variable, population, type, stab = value_stab, coef = value_coef)
+
+  ## Add cruise_id and return
+  combined = combined %>% add_column(cruise_id = cruise_id)
+
+  return(combined)
+}) %>% bind_rows() 
+coef_long = coef_long %>% select(cruise_id, variable, population, type, coef, stab)
+saveRDS(coef_long, file = file.path(outputdir, "coef_long_main.RDS"))
+print(coef_long)
+coef_long %>% head(20) %>% knitr::kable(caption = "Estimated coefficients in long format.")
+```
+
+**Predictions.** The columns are:
+
+ + cruise
+ + time
+ + lon
+ + lat
+ + population
+ + type ("mu_diam", "mu_chl", "mu_pe", "pi")
+ + value (the value)
+ 
+
+
+```{r pred_long}
+pred_long = lapply(all_cruise_id, function(cruise_id){
+  
+  ## Cluster labels
+  one_mapmat_long = mapmat_long %>% filter(cruise_id == !!(cruise_id)) %>% arrange(value) %>% na.omit()
+  stopifnot((one_mapmat_long %>% pull(value)) == (1:10))
+  cluster_labels = one_mapmat_long %>% pull(name)
+
+  ## print(cruise_id)
+  ## cluster_labels = NULL
+
+  ## Times
+  filename = paste0(cruise_id, "-datobj.RDS")
+  ybin_obj = readRDS(file = file.path(outputdir_cytograms, cruise_id, "data", filename))
+
+  ## Get time & lon & lat.
+  times = ybin_obj$time %>% lubridate::as_datetime()
+  lon = ybin_obj$lon
+  lat = ybin_obj$lat
+  
+  ## Means
+  bestres = load_model(cruise_id)
+  mn_long = lapply(cytogram_dimnames, function(dimname){
+    mn = bestres$mn %>% .[,which(cytogram_dimnames == dimname),]
+    colnames(mn) = cluster_labels
+    mn = mn %>% as_tibble() %>% add_column(time = times, lon = lon, lat = lat) %>%
+      pivot_longer(-c(lon, lat, time), names_to = "population") %>% add_column(type=paste0("mu_", dimname))
+    return(mn)
+  }) %>% bind_rows() ##%>% pivot_wider(time, name)
+  ## mn_wider = mn_long %>% pivot_wider(names_from = c("type"), values_from = "value")
+
+  ## Probabilities
+  prob = bestres$prob 
+  colnames(prob) = cluster_labels
+  prob_long = prob %>% as_tibble() %>% add_column(time = times, lon = lon, lat = lat) %>%
+      pivot_longer(-c(lon, lat, time), names_to = "population") %>% add_column(type = "prob")
+
+
+  ## Combine Prob and Means
+  combined = bind_rows(prob_long, mn_long)##, sigma_long)
+
+  ## Add cruise id and reaturn
+  combined = combined %>% add_column(cruise_id = cruise_id)
+  return(combined)
+}) %>% bind_rows() 
+
+pred_long = pred_long %>%  select(cruise_id, time, lon, lat, population, type, value)
+saveRDS(pred_long, file = file.path(outputdir, "pred_long_main.RDS"))
+pred_long %>% head(20) %>% knitr::kable(caption = "Predicted mean and abundance in long format.")
+```
+
+
+**Covariance matrix.** The columns are:
+
+ + cruise
+ + population
+ + name: `"sigma_1_1"` means the (1,1)'th entry of the covariance matrix.
+ + value: the value of the covariance matrix entry
+
+```{r sigma_long}
+sigma_long = sapply(all_cruise_id, function(cruise_id){
+
+  ## Cluster labels
+  one_mapmat_long = mapmat_long %>% filter(cruise_id == !!(cruise_id)) %>% arrange(value) %>% na.omit()
+  stopifnot((one_mapmat_long %>% pull(value)) == (1:10))
+  cluster_labels = one_mapmat_long %>% pull(name)
+
+  ## Gather sigma
+  sigmanames = paste0("sigma_", expand.grid(1:3, each=1:3) %>% apply(1, paste0, collapse="_"))
+  sigma_wide = bestres$sigma %>% apply(1,c)
+  colnames(sigma_wide) = cluster_labels 
+  sigma_long = sigma_wide %>% as_tibble() %>% add_column(name = sigmanames) %>% pivot_longer(-name, names_to = "population")
+
+  ## Also, here's a helper function to go from this to a 3 x 3 matrix
+  if(FALSE){
+    one_sigma_long = sigma_long %>% dplyr::filter(population == "pro1") ## this is an example
+    make_covariance <- function(one_sigma_long){
+      stopifnot(nrow(one_sigma_long) == 9)
+      convertmat = one_sigma_long %>% pull(name) %>% sapply(., str_split, "_") %>% purrr::map(.%>%.[2:3]%>% as.numeric() ) %>% bind_rows() %>% t()
+      sigmamat = matrix(NA, ncol = 3, nrow = 3)
+      for(ii in 1:9){ 
+        irow = convertmat[ii,1, drop=TRUE]
+        icol = convertmat[ii,2, drop=TRUE]
+        sigmamat[irow, icol] = one_sigma_long[ii, "value", drop=TRUE]
+      }
+      assertthat::assert_that(all(!is.na(sigmamat)))
+      return(sigmamat)
+    }
+    make_covariance(one_sigma_long)
+  }
+  return(sigma_long)
+}, simplify = FALSE, USE.NAMES = TRUE) %>% bind_rows(.id = "cruise_id") %>% arrange(cruise_id, population)
+
+saveRDS(sigma_long, file = file.path(outputdir, "sigma_long_main.RDS"))
+pred_long %>% head(20) %>% knitr::kable(caption = "Estimated covariance matrix in long format.")
+```
+
+
+**Covariates.** The columns are:
+
+  + cruise
+  + time
+  + covariate
+  + value
+
+```{r X_long}
+X_long = lapply(all_cruise_id, function(cruise_id){
+
+  ## Get X
+  bestres = load_model(cruise_id)
+  X = bestres$X %>% as_tibble()
+
+  ## Load times
+  filename = paste0(cruise_id, "-datobj.RDS")
+  ybin_obj = readRDS(file = file.path(outputdir_cytograms, cruise_id, "data", filename))
+  ylist = ybin_obj$ylist
+  times = names(ylist)
+
+  ## Add time to X
+  X = X %>% add_column(time = lubridate::as_datetime(times))
+
+
+  ## Pivot longer
+  X = X %>% pivot_longer(!time, names_to = "variable")
+
+  ## Add cruise id
+  X = X %>% add_column(cruise_id = cruise_id)
+
+  return(X)
+}) %>% bind_rows()
+
+X_long = X_long %>% select(cruise_id, time, variable, value)
+saveRDS(X_long, file = file.path(outputdir, "X_long_main.RDS"))
+X_long %>% head(20) %>% knitr::kable(caption = "Environmental covariates in long format.")
+```
+
+**Data** A long matrix of binned data with the columns.
+
++ date/time
++ cruise_id
++ diam & chl & pe & biomass (for each bin that has nonzero data)
++ counts: biomass in that bin
+
+```{r dat_long, eval = FALSE}
+dat_list = sapply(all_cruise_id, function(cruise_id){
+  ## Load cytogram data.
+  filename = paste0(cruise_id, "-datobj.RDS")
+  ybin_obj = readRDS(file = file.path(outputdir_cytograms, cruise_id, "data", filename))
+  ylist = ybin_obj$ylist
+  countslist = ybin_obj$biomass_list
+  ylong = Map(function(y, c){data.frame(y, counts = c) %>% as_tibble()}, ylist, countslist) %>% bind_rows(.id = "time")
+  return(ylong)
+}, simplify = FALSE, USE.NAMES = TRUE)
+dat_long = dat_list %>% bind_rows(.id = "cruise_id")
+dat_long = dat_long %>% mutate(time = lubridate::as_datetime(time))
+dat_long %>% object.size() %>% format("Mb")
+saveRDS(dat_long, file = file.path(outputdir, "dat_long_main.RDS"))
+dat_long %>% head(20) %>% knitr::kable(caption = "Binned cytometry data in long format.")
+```
+
+```{r knit-exit}
+knitr::knit_exit()
+```
+
+
+# Next up
+
+Finalize the pilot:
+
+* Scale-free measure of each (covariate, cluster, cruise) to be compared across
+  cruises. One idea is an ANOVA-type ratio of variance e.g. $var(X^T\beta_{salinity, k}) / var(\mu_k)$.
+* Summarize (the absolute value of) coefficients across cruises.  
+  + One plot per cluster; X axis is covariate value, and y axis is cruise.
+* **done** Proper usage of random seeds (for experiments to be reproducible).
+* **done** Calculate stability: 100x repeats of experiments.
+* **done** Common-scaled covariate values (by fixing error in alpha M step).
+* **done** Match and label a few clusters.
+* **done** Match the clusters among the cruises, as much as possible, before producing
+  these results. Label these clusters.
+* **done** From the aggregated results, make plots with (y axis = which covariate) vs. (x
+  axis = value).
+
+Then, once the pilot is at a satisfactory state, do rest of experiments:
+
+* Clean the cytograms from the remaining cruises.
+* Run the jobs on the servers.
+* Produce analyses.
+
+
+Next things to do
+
+* **DONE** Match the clusters among the cruises, as much as possible, before producing
+  these results. Label these clusters.
+* From the aggregated results, make plots with (y axis = which covariate) vs. (x
+  axis = value).
+* The estimated coefficients across cruises, in a single plot.
+
+# Graveyard
+
+## Notes from older experiments with non-common-scaled covariates 
+
+Some notes of mine go here.
+
+**Common observations**
+
+* Persistent: two populations near prochloro's chl and diam, but one usually has
+  no chl, and the pro has some chl.
+* Two picoeuks that are separate.
+* Synecho is nonexistent everywhere.
+
+**KM1513**
+
+* **Picoeuk(2&4)** Cluster 2 and 4 are separate picoeuk populations. Similar
+  diameter, but 4 has lots of *pe*, while *2* have very little *pe*; both have
+  *diam* and *pe* that oscillate with diel cycle, *together*.
+* Continuing with 2 and 4; both seem to have a similar amount of Chl, but 4's
+  *chl* oscillates much more than 2's *chl*.
+* **Prochloro(6)** *10* and *6* seem to be separate populations; 6 is probably
+  prochloro with lots of diel movement of diameter, while 10 doesn't. 6 has some
+  *chl* (more than 10) while 10 has very small *chl*. Let's call 10 the "other".
+
+
+**KOK1515**
+
+* **Prochloro(10)** diel movement, and separate from 4.
+* **Picoeuk(9&3)** 9 and 3 are the same as 2 and 4 from KM1513! Exciting -- look
+  more carefully!
+
+**KM1518**
+
+* **Picoeuk(7&2)** same as 2&4 from KM1513.
+* **Prochloro(10)** and a separate "other" 9.
+
+**KM1512**
+
+* **Picoeuk(3&1 and maybe 5)** It seems like 3&1 are 2&4 from KM1513 but 1
+  captures a wider range in chl than in other cruises (there is less data here
+  than in other cruises). We might try using even more clusters to narrow this down.
+* **Prochloro(7&9)** 7&9 is prochloro, 10 is "other" (with no chl).
+
+**KM1508**
+
+* **Picoeuk(1&3 and maybe 4)** are same as 2&4. Cluster 2 has Strong diel
+  moevement with diam and some pe as well. 3 has much smaller chl than in other
+  cruises.
+* **Prochloro(8&9)** CLEAR separation!

@@ -1,0 +1,590 @@
+---
+title: Obtaining environmental covariates
+date: "Compiled at `r format(Sys.time(), '%Y-%m-%d %H:%M:%S', tz = 'UTC')` UTC"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+---
+
+```{r global_options, include=TRUE, message = FALSE, results='hide',warning=FALSE}
+knitr::opts_chunk$set(fig.width=14, fig.height=8, echo=TRUE, eval=TRUE, cache=TRUE,
+                      warning=FALSE, message=FALSE,
+                      cache.lazy = FALSE)
+
+## Load packages
+library(tidyverse)
+library(knitr)
+library(cmap4r)
+library(here)
+
+## Setup some plotting details
+coul <- colorRampPalette(RColorBrewer::brewer.pal(8, "RdYlBu"))(25)
+source("00-helpers.R")
+```
+ 
+```{r directories}
+base = "00-covariates"
+here::i_am("00-covariates.Rmd")
+knitr::opts_chunk$set(fig.path = here::here("data", base, 'figures/'))
+outputdir = here::here("data", base)
+if(!dir.exists(outputdir)) dir.create(outputdir)
+```
+
+# Decide on cruises and environmental variables
+
+There are `r read.csv(file.path(outputdir, "seaflow-instrument-log-metadata.csv")) %>% nrow()` cruises
+in total (the meta information is also in
+https://docs.google.com/spreadsheets/d/1Tsi7OWIZWfCQJqLDpId2aG_i-8Cp-p63PYjjvDkOtH4/edit#gid=0).
+
+Out of these cruises, we choose:
+
+* Cruises that exist in CMAP, and
+* Cruises for which a common set of environmental covariates can be colocalized.
+
+Based on these criteria, we isolate our attention to **32** cruises between 2013
+and 2018 -- the ones between the following two cruises (excluding the cruises
+for which PAR, salinity and temperature are too sparse to use).
+
+Out of the 32, we'll be able to use **24** cruises fully -- 8 cruises have
+some missing data from covariates.
+
+Some other notes:
+
+* KM1510 has too noisy and little cytogram data.
+
+* Anything before May 2015 (KM1502, KM1427, KM1314, KN210-04) don't have
+  salinity data, so unusuable.
+
+* Pilot was 5 cruises KM1508 through KM1518
+
+* Round 1 was KM1601 through KOK1609 (7 cruises)
+
+* Round 2 will be (3 cruises) MGL1704 KM1708 KM1709.
+
+* Round 3 will be (3 cruise) KM1712 KM1713 KM1717.
+
+* Round 4 will be (3 cruises) KM1802 KM1805 FK180310-1.
+
+* Round 5 will be (3 cruises) FK180310-1 KOK1801 KOK1803.
+
+
+```{r results = 'asis'}
+## Load all the seaflow cruise IDs
+meta_data = read.csv(file.path(outputdir, "seaflow-instrument-log-metadata.csv")) %>%
+  as_tibble() %>%
+  select(cruise, Cruise.ID, Location, Year, Month) %>%
+  mutate(Month = trimws(Month)) %>% 
+  mutate(Month = match(Month, month.name)) %>% 
+  arrange(Year, Month)
+ids_seaflow = meta_data %>% select(Cruise.ID, Year, Month)
+
+
+## Ask CMAP which cruises exist there (Not run now; loaded from file).
+## ids_in_cmap = get_cruises() %>% pull(Name)
+## saveRDS(ids_in_cmap, file = "ids_in_cmap.RDS")
+ids_in_cmap = readRDS(file.path(outputdir, "ids_in_cmap.RDS"))
+
+## Out of all seaflow cruises, focus on those between 2013 and 2019
+ids_seaflow = ids_seaflow %>% filter(Cruise.ID %in% ids_in_cmap) %>%
+  select(Cruise.ID, Year, Month) %>%
+  arrange(Year, Month)
+## begin = which(ids_seaflow$Cruise.ID == "KM1314")
+## end = which(ids_seaflow$Cruise.ID == "KOK1803")
+## ids_final = ids_seaflow[begin:end,]  %>% pull(Cruise.ID)
+ids_final = ids_seaflow %>% dplyr::filter(Year %in% c(2013:2018)) %>% pull(Cruise.ID)
+
+## PAR is missing or erroneous for these cruises:
+ids_final = ids_final[-which(ids_final %in% c("TN291", "TN292", "CN13ID",
+                                              "KOK1805", "SKQ201615S", "MV1405"))] 
+## There's too little data in these cruises.
+ids_final = ids_final[-which(ids_final %in% c("KOK1512", "KM1603", "KM1823"))]  
+
+## There's no covariates in these last three cruises of 2018
+ids_final = ids_final[-which(ids_final %in% c("RR1814", "KM1821", "RR1815"))]  
+
+## Save the final cruise list.
+meta_data %>% filter(Cruise.ID %in% ids_final) %>%
+  arrange(Year, Month) %>% 
+kable() %>% print()
+
+saveRDS(ids_final, file = here::here("data", base, "ids_final.RDS"))
+```
+
+Also, here's the list of CMAP variables we'll use:
+
+```{r, results = "asis"}
+vars = read.csv(file = file.path("/home/sangwonh/repos/cruisedat", "CMAP_vars_all_cruises.csv")) %>% as_tibble()
+vars %>% mutate(Table_Name = str_replace_all(Table_Name,
+                                             pattern = "tblWind_NRT",
+                                             replacement = "tblWind_NRT_deprecated")) %>% kable() %>% print()
+vars %>% kable() %>% print()
+```
+
+# Goal
+
+Our goals are:
+
+* Load covariates from cruise: salinity, temperature, and sunlight (PAR).
+
+* Obtain colocalized covariates from Simons CMAP.
+
+* Combine the two sources to get a single table for each cruise.
+
+* Clean and complete (impute) environmental covariates whenever possible, to
+  have more complete data.
+
+# Prepare on-board data
+
+## Clean on-board sunlight (PAR)
+
+Load PAR data first.
+
+```{r get-par}
+## Getting PAR data from the SFL directory 
+## sfl_dir = "/home/sangwonh/Dropbox/research/usc/flow-cytometry/data/colocalize/seaflow-sfl-master/curated"
+sfl_dir = file.path(outputdir, "cruise-data")
+if(!dir.exists(sfl_dir)) dir.create(sfl_dir)
+all_sfl_files = list.files(sfl_dir)
+all_sfl_files = all_sfl_files[-which(all_sfl_files  == "README.md")]
+conversion_table = readRDS(file.path(outputdir, "conversion_table.RDS"))
+
+## Read in SFL tables
+datlist_par = list()
+for(id in ids_final){
+  cruise_sfl_filename = conversion_table %>% filter(Cruise.ID == id) %>% pull(filename)
+  par_table = tryCatch({
+    read.table(file.path(sfl_dir, cruise_sfl_filename), header = TRUE, sep = "") %>% as_tibble() %>%
+      mutate(time = lubridate::as_datetime(DATE)) %>%
+      select(time, par = PAR) %>% mutate(par = as.numeric(par)) %>% add_column(id = id)
+  }, error = function(e){ return(NULL) })
+  if(is.null(par_table)) next
+  datlist_par[[id]] = par_table
+}
+```
+
+PAR data is cleaned (mainly) using `fill_in_par()`.
+
+```{r clean-par}
+## Manual cleaning of a single cruise:
+par_new = datlist_par[["KM1709"]]$par %>% median_smooth() %>% median_smooth()
+datlist_par[["KM1709"]]$par = par_new
+
+## Manual data removal of a single cruise:
+too_early = which(datlist_par[["KM1712"]]$time < lubridate::as_datetime("2017-08-02"))
+datlist_par[["KM1712"]][too_early, "par"] = NA
+
+## Aggregate to hourly level.
+datlist_par_hourly = datlist_par %>% purrr::map(.%>% coarsen_to_hourly())
+
+## Make the conversion, using our "fill_in_par()" function
+datlist_par_hourly_new = Map(fill_in_par, datlist_par_hourly, names(datlist_par_hourly))
+plotlist_par_hourly_new = Map(fill_in_par, datlist_par_hourly, names(datlist_par_hourly), makeplot=TRUE) 
+
+## A couple of manual adjustments
+datlist_par_hourly_new[["KOK1803"]] = fill_in_par(datlist_par_hourly[["KOK1803"]], "KOK1803", fill_all=TRUE)##, makeplot=TRUE)
+plotlist_par_hourly_new[["KOK1803"]] = fill_in_par(datlist_par_hourly[["KOK1803"]], "KOK1803", fill_all=TRUE, makeplot=TRUE)
+```
+
+
+```{r plot-cleaned-par, fig.width=10, fig.height=25}
+## Showing the interpolated PAR in green
+do.call(gridExtra::grid.arrange, c(plotlist_par_hourly_new, ncol=2)) 
+```
+
+
+## Cleaning on-board salinity and temperature
+
+Temperature and salinity data is fixed and interpolated whenever there's a gap
+shorter than 12 hours.
+
+```{r clean-salinity-temperature}
+datlist_sss_sst_hourly = read.csv(file.path(outputdir, "clean_sfl.csv")) %>% as_tibble() %>%
+  rename(id = cruise, time = DATE, sss_cruise = SALINITY, sst_cruise = TEMP) %>%
+  filter(id %in% ids_final) %>% 
+  mutate(id = as.factor(id)) %>%
+  named_group_split(id) %>% purrr::map(.%>% 
+                                       ## mutate(sss_cruise = as.numeric(scale(sss_cruise)),
+                                       ##        sst_cruise = as.numeric(scale(sst_cruise)), id = id) %>% 
+                                       mutate(sss_cruise = as.numeric(sss_cruise),
+                                              sst_cruise = as.numeric(sst_cruise), id = id) %>% 
+                                       mutate(time = lubridate::as_datetime(time)) %>%
+                                       arrange(time) %>% 
+                                       padr::pad() %>% 
+                                       fill(id))
+
+## datlist_sss_sst_hourly %>% bind_rows() %>% ggplot() + facet_wrap(~id, scales = "free_x", nrow = 2) +  geom_point(aes(x=time, y=sss_cruise), cex=.3)
+
+## ## Manual outlier fix for salinity (NOT sure about this)
+## ii = which(datlist_sss_sst_hourly[["FK180310-2"]]$sss_cruise <= -6)
+## stopifnot(length(ii) == 1)
+## datlist_sss_sst_hourly[["FK180310-2"]]$sss_cruise[ii] = mean(datlist_sss_sst_hourly[["FK180310-2"]]$sss_cruise[ii + ((-3):(-1))], na.rm=TRUE)
+## datlist_sss_sst_hourly[["FK180310-2"]]$sss_cruise = scale(datlist_sss_sst_hourly[["FK180310-2"]]$sss_cruise)
+
+## Fill in sss and sst using spline interpolation
+datlist_sss_sst_hourly_new <-
+  datlist_sss_sst_hourly %>% purrr::map( .%>% arrange(time) %>% 
+    mutate(sss_cruise = zoo::na.spline(sss_cruise, maxgap = 12)) %>% 
+    mutate(sst_cruise = zoo::na.spline(sst_cruise, maxgap = 12)) %>%
+  fill(id))
+
+## Basic check: the two data have the same cruises?
+stopifnot(setdiff(names(datlist_sss_sst_hourly), names(datlist_par_hourly)) %>% length() == 0)
+stopifnot(setdiff(names(datlist_par_hourly), names(datlist_sss_sst_hourly)) %>% length() == 0)
+```
+
+
+## Combine (par) with (temperature, salinity)
+
+Now, we'll combine all the on-board data.
+
+```{r combine-on-board}
+datlist_combined = list()
+for(id in ids_final){
+  datlist_combined[[id]] = full_join(datlist_sss_sst_hourly_new[[id]], datlist_par_hourly_new[[id]],
+                                     by = c("id", "time"))  %>% 
+    ## mutate_at(vars(-time, -id, -contains("par")), ~as.numeric(scale(.x))) %>%  ## Not doing this because this scaling is done later.
+    mutate_at(vars(par), ~as.numeric(scale(.x, center=FALSE)))
+}
+```
+
+We'll additionally add four lagged PAR variables.
+
+```{r add-lagged-par}
+datlist_combined_lagged = datlist_combined %>% purrr::map(. %>% add_all_lagged_par())
+```
+
+Here are the finalized on-board covariates:
+
+```{r plot-cruise-dat, fig.width=10, fig.height=5}
+## Make a plot of all data
+## sst_range = datlist_combined_lagged %>% purrr::map(. %>% pull(sst_cruise) %>% range()) %>% unlist() %>% range()
+## sss_range = datlist_combined_lagged %>% purrr::map(. %>% pull(sss_cruise) %>% range()) %>% unlist() %>% range()
+for(ii in 1:8){
+  datlist_combined_lagged %>% .[4*(ii-1)+(1:4)] %>% ## .["MGL1704"] %>% ##.["KN210-04"] %>%
+    bind_rows() %>% 
+    group_by(id) %>% 
+    arrange(time) %>% 
+    pivot_longer(cols = c("par", "sss_cruise", "sst_cruise")) %>%
+    ## pivot_longer(cols = c(contains("par"), "sss_cruise", "sst_cruise")) %>%
+    ggplot() + 
+    facet_grid(name~id, scales = "free") + ##, ncol = 2) +
+    geom_point(aes(x = time, y = value, col = name), cex=.5) +
+    geom_line(aes(x = time, y = value, col = name)) +
+    scale_x_datetime(date_labels = "%b%d\n%Y") +
+    theme(strip.text.x = element_text(size = rel(1), face = "bold"))  -> p
+  print(p)
+}
+
+datlist_combined = datlist_combined_lagged   ##.["KN210-04"] %>% 
+```
+
+# Combine with CMAP variables
+
+
+The CMAP variables can be downloaded using this script (not run now):
+
+```{r colocalize, eval = FALSE}
+## Get the tolerances for colocalization.
+base = "00-covariates"
+source(here::here("data", base, "colocalize-params.R"))
+
+## Temporarily placing here (redundant)
+ids_final = readRDS(file = here::here("data", base, "ids_final.RDS"))
+vars = read.csv(file = file.path("/home/sangwonh/repos/cruisedat", "CMAP_vars_all_cruises.csv")) %>% as_tibble()
+vars = vars %>% mutate(Table_Name = str_replace_all(Table_Name,
+                                             pattern = "tblWind_NRT",
+                                             replacement = "tblWind_NRT_deprecated")) ##%>% kable() %>% print()
+vars %>% kable() %>% print()
+nvar = nrow(vars)
+## End of temporary
+
+
+datlist = mclapply(ids_final, function(id){
+
+  ## Safely restarting cruises that don't exist
+  if(file.exists(file = file.path(outputdir, "cmap-data", paste0(id, "-adaptive.RDS")))) return(NULL)
+
+  ## Colocalize all variables
+  reslist = lapply(1:nvar, function(ivar){
+    tryCatch({
+
+      varname = vars %>% pull(Variable) %>% .[ivar]
+      tabname = vars %>% pull(Table_Name) %>% .[ivar]
+
+      if(tabname %in% c("tblWOA_Climatology", "tblPisces_NRT", "tblCHL_REP", "tblModis_PAR")){
+        param = list_of_params[[tabname]]
+      } else {
+        param = list_of_params[["other"]]
+      }
+      for(isize in 1:20){
+
+        ## Increase the radius
+        if(isize > 1) param$latTolerance = param$latTolerance + 0.1
+        if(isize > 1) param$lonTolerance = param$lonTolerance + 0.1
+
+        ## Perform the colocalization
+        dt = along_track(id,
+                         targetTables = tabname,
+                         targetVars = varname,
+                         temporalTolerance = param$temporalTolerance,
+                         latTolerance = param$latTolerance,
+                         lonTolerance = param$lonTolerance,
+                         depthTolerance = param$depthTolerance,
+                         depth1 = param$depth1,
+                         depth2 = param$depth2) %>% as_tibble() 
+        dt = dt %>% dplyr::select(!contains("_std"))
+
+        ## Check the missing proportion
+        dt_missing_prop = dt %>% summarize(naprop = mean(is.na(!!sym(varname)))) %>% unlist()
+        ## print(dt_missing_prop)
+        if(dt_missing_prop == 0) break
+      }
+      return(dt)
+    }, error = function(e){
+      return(NULL)
+    })
+  })
+  lens = reslist %>% purrr::map(. %>% length()) %>% unlist()
+  if(any(lens == 0)){ reslist = reslist[-which(lens == 0)] }
+  if(length(reslist) > 0){
+    fullres = reslist %>% purrr::reduce(full_join, by = c("time", "lon", "lat"))
+    fullres = fullres %>% dplyr::select(!contains("_std"))
+    saveRDS(fullres, file = file.path(outputdir, "cmap-data", paste0(id, "-adaptive.RDS")))
+    ## saveRDS(fullres, file = file.path(outputdir, "cmap-data", paste0(id, "-adaptive.RDS")))
+    return(NULL)
+  }
+  return(NULL)
+}, mc.cores = length(ids_final), mc.preschedule = FALSE)
+```
+
+(Assuming the above code has been run, let's proceed to load and process it.)
+
+Running this code produces `datlist`, accessed last in 2021-07-20. We'll save
+this to a file, and summarize using a heatmap of data availability, for each
+cruise and variable.
+
+```{r load-cmap, fig.width=8, fig.height=9}
+## Read in all the data points
+## filename0 = file.path(outputdir, paste0(id, "-adaptive", ".RDS"))
+## filename0 = here::here("data", base, "cmap-data", paste0("MGL1704", "-adaptive", ".RDS"))
+filename0 = here::here("data", base, "cmap-data", paste0("MGL1704", "-adaptive", ".RDS"))
+fullres0 = readRDS(file = filename0) %>% add_column(id = "MGL1704") %>% .[c(),]
+datlist_cmap = sapply(ids_final, function(id){
+  ## filename = here::here("data", base, "cmap-data", paste0(id, "-adaptive", ".RDS"))
+  filename = here::here("data", base, "cmap-data", paste0(id, "-adaptive", ".RDS"))
+  ## filename = file.path(outputdir, paste0(id, "-adaptive", ".RDS"))
+  if(file.exists(filename)){
+    fullres = readRDS(file = filename) %>% add_column(id = id)
+  } else { return(fullres0) }
+}, simplify = FALSE, USE.NAMES = TRUE)
+## saveRDS(datlist, file = file.path(outputdir, "datlist.RDS"))
+
+## Make a plot of CMAP data availability
+sorted_names = 
+  mynames = names(datlist_cmap)
+  sorted_mynames = meta_data %>% filter(Cruise.ID %in% mynames) %>% arrange(Year, Month) %>% pull(Cruise.ID)
+plot_frequency(datlist_cmap[sorted_mynames])
+```
+
+The pipeline is:
+
+1. Complete (interpolate) PAR \& salinity \& temperature. <-- This is b/c the
+   completeness of PAR is super important.
+
+2. Left-combine this with colocalized variables. <--- This ensures that PAR
+   completeness is preserved.
+
+3. Complete once more. <-- This ensures that all other variables are connected.
+
+4. Scale all variables (EXCEPT par, which has already been scaled). Save to
+   file.
+
+Step 2 is here:
+
+```{r combine}
+## Ready to combine (cruise data) + (colocalized data)
+noncruisedat = datlist_cmap %>% purrr::map(.%>% coarsen_to_hourly())
+cruisedat = datlist_combined 
+
+## Basic Check
+stopifnot(all(names(noncruisedat) == names(cruisedat)))
+
+## Combine the two (inner join because PAR and lagged PARs are complete now)
+combined_dat = Map(function(x,y){ inner_join(x,y, by = c("id", "time")) },
+                   noncruisedat, cruisedat)
+```
+
+Step 3 is here:
+
+```{r fill}
+## Complete the non-cruise data once more.
+combined_dat_complete = combined_dat %>%
+  purrr::map(. %>%  mutate_at(vars(-time, -lat, -lon, -contains("par"), -sss_cruise, -sst_cruise, -id),
+                              ~ zoo::na.approx(.x, maxgap = 12)))
+```
+
+By the way, data completion at this step is minimal; here is an example:
+
+```{r fill-plot, fig.width=10, fig.height=20}
+id = ids_final[21]
+list(combined_dat%>% .[[id]] %>% add_column(type = "incomplete"),
+     combined_dat_complete %>% .[[id]] %>% add_column(type = "complete")) %>%
+  data.table::rbindlist(fill = TRUE) %>% 
+  select(-id) %>% 
+  ## mutate_at(vars(-time, -lat, -lon), scale) %>%
+  pivot_longer(cols = -one_of(c("time", "lat", "lon", "type"))) %>%
+  ggplot() + facet_wrap(~name, scales = "free_y", ncol=2) +
+  geom_line(aes(x=time, y=value), . %>% filter(type=="complete"), col = rgb(0,0,0,0.3))+
+  geom_point(aes(x=time, y=value), . %>% filter(type=="complete"), col='green', cex=.2) +
+  geom_point(aes(x=time, y=value), . %>% filter(type=="incomplete"),cex=.2) +
+  scale_x_datetime(breaks = scales::date_breaks("1 day"), date_labels = "%b %d %Y")  +
+  theme(axis.text.x = element_text(angle = 90)) -> p
+print(p)
+```
+
+Remove all the rows with any NAs; the summarizing heatmap should have all 1's or
+NA's (grey) now.
+
+```{r remove-na, fig.width=8, fig.height=9}
+## Remove all rows with any NAs 
+combined_dat_complete = combined_dat_complete %>% lapply(., function(a){
+  if(nrow(a) == 0) return(a)
+  a %>% select(where(~!all(is.na(.x)))) %>% na.omit() 
+})
+
+## Make plot of frequency; this should be all 1's wherever data exists.
+plot_frequency(combined_dat_complete)
+```
+
+# Save data
+
+Lastly, scale all variables EXCEPT par, which has already been scaled. 
+
+The scaling will be done one variable at a time, by pooling all measurements
+from all cruises and applying a **common scaling**.
+
+Then, save to RDS files.
+
+## {.tabset}
+
+```{r scale-and-save, results='asis', fig.width=10, fig.height=20}
+## Create common scaled version of data
+combined_dat_complete_common_scaled =
+  ## Combine all tables
+  combined_dat_complete %>%
+  ## ## Scale PAR values to be scaled within each cruise. 
+  ## purrr::map(. %>% mutate_at(vars(contains("par")), ~as.numeric(scale(.x, center=FALSE)))) %>% 
+  bind_rows() %>%
+  ## Perform scaling on the rest of variables
+  mutate_at(vars(-time,-lat, -lon, -id, -contains("par")), ~as.numeric(scale(.x))) %>%
+  ## Split by group again
+  named_group_split(id)
+
+## Save three versions of the covariates data.
+for(id in ids_final){
+  cat('###',id,' \n')
+  if(nrow(combined_dat[[id]]) == 0) next
+
+  ## Save unscaled version
+  onedat = combined_dat_complete %>% .[[id]] 
+  filename = paste0(id, "-covariates-unscaled.RDS")
+  saveRDS(onedat, file = here::here("data", base, "cleaned", filename))
+
+  ## Save scaled version (scaled within each cruise)
+  onedat_scaled = onedat %>% 
+    mutate_at(vars(-time, -id, -contains("par")), ~as.numeric(scale(.x)))
+  filename = paste0(id, "-covariates-scaled.RDS")
+  saveRDS(onedat_scaled, file = here::here("data", base, "cleaned", filename))
+
+  ## ## Temporary
+  ## onedat_scaled  %>% select(-id, -lat, -lon) %>% 
+  ## pivot_longer(-one_of("time")) %>%
+  ## ggplot() + 
+  ## facet_wrap(~name) +##, scale = "free_y") + 
+  ## geom_line(aes(x=time, y=value))
+
+  ## Save *Common* scaled version (scaled across all cruises together)
+  onedat_common_scaled = combined_dat_complete_common_scaled %>% .[[id]]
+  filename = paste0(id, "-covariates-common-scaled.RDS")
+  saveRDS(onedat_common_scaled, file = here::here("data", base, "cleaned", filename))
+
+  ## ## temporary
+  ## ## combined_dat_complete %>%  
+  ## combined_dat_complete_common_scaled %>%  
+  ## ## combined_dat_complete_common_scaled %>%  
+  ##   data.table::rbindlist(fill = TRUE) %>%
+  ##   ggplot() +
+  ##   facet_wrap(~id, scale = "free_x") +
+  ##   geom_point(aes(x=time, y=par), cex=.5) +
+  ##   geom_line(aes(x=time, y=par), lwd = .5, col = rgb(0,0,0,0.2)) 
+
+  ## Plot scaled data
+  p = onedat_common_scaled %>%
+    pivot_longer(-one_of("time", "lat", "lon", "id"))  %>% 
+    ggplot() + facet_wrap(~name, scales = "free_y", ncol=2) +
+    geom_line(aes(x=time, y=value), lwd=.8, col=rgb(0,0,0,0.3)) + ##, col=name))
+    geom_point(aes(x=time, y=value), cex=.3) +
+    ggtitle(id)  
+  print(p)
+  cat('\n\n')
+}
+```
+
+Some (visual) oddities we'll not deal with right now.
+1. PP seems to shoot up in one or two cruise.
+2. Fe also shoots up at the same point, but to a lesser extent.
+3. WOA variables for the same cruise as PP -- CHL also shoots up.
+
+
+```{r}
+knitr::knit_exit()
+```
+
+Everything after here is useful stuff not included in the output.
+
+# Visualize all data together
+
+We visualize each covariate in a separate panel, where all cruises have been
+concatenated together:
+
+```{r}
+bigdat = combined_dat_complete %>% data.table::rbindlist(use.names = TRUE, fill = TRUE, idcol=NULL) %>% as_tibble()
+bigdat_long = bigdat %>% pivot_longer(cols = -one_of(c("time", "lat", "lon", "id")))
+plist = list()
+for(val in vals){
+  print(val)
+  bigdat_long %>% filter(name %in% c(val)) %>% 
+  ggplot() +
+  theme_bw() +
+  facet_grid(.~id, scales = "free",  space='free_x') +
+  geom_line(aes(x=time, y=value), lwd=.5, col=rgb(0,0,0,0.3)) +
+  geom_point(aes(x=time, y=value), cex=.3, col='red') +
+  guides(colour = guide_legend(nrow = 2)) +
+    xlab("") +
+    ylab("") +
+    ggtitle(val) +
+  theme(legend.position="bottom") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  theme(strip.text.x = element_text(size = rel(.5), face="bold")) -> p
+  plist[[val]] = p
+}
+
+## Save these to files
+library(gridExtra)
+chunks = split(1:27, ceiling(seq_along(1:27)/3))
+for(chunk in chunks){
+  print(chunk)
+  pp = do.call("grid.arrange", c(plist[chunk], ncol=1))
+  filename = paste0(vals[chunk] %>% substr(0,3), collapse="-") %>% paste0("-new.png")
+  ggsave(plot = pp, file = here::here("data", base, "concat", filename), width = 40, height=20)
+}
+```
+
+
+```{sh}
+from=~/repos/flowmixapp/data/00-covariates/cleaned/*-covariates-common-scaled.RDS
+to=sangwonh@discovery.usc.edu:repos/flowmixapp/data/00-covariates/cleaned/.
+scp -r $from $to
+```
