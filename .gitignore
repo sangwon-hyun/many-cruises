@@ -1,0 +1,8 @@
+data/00-covariates/*
+data/01-cytograms/*
+data/02-fit-model/*
+**/*_cache
+**/*_files
+**/.Rhistory
+**/viz/*.png
+**/viz/*.mp4
