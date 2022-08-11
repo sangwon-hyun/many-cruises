@@ -21,13 +21,23 @@ identically named directory called ~00-covariates~.
 ** Structure
 
 *** Obtaining and cleaning covariates:
-[[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/flowmixapp/blob/main/00-covariates.html][00-covariates.html]]
+[[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/many-cruises/blob/main/00-covariates.html][00-covariates.html]]
 
 *** Obtaining cytograms:
-[[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/flowmixapp/blob/main/01-cytograms.html][01-cytograms.html]]
+[[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/many-cruises/blob/main/01-cytograms.html][01-cytograms.html]]
 
 *** Estimate flowmix model on many cruises:
-[[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/flowmixapp/blob/main/02-estimate.html][02-estimate.html]]
+[[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/many-cruises/blob/main/02-estimate.html][02-estimate.html]]
+
+*** Question: Where does each species live?
+[[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/many-cruises/blob/main/03-where-plankton.html][03-where-plankton.html]]
+
+# *** Question: What environmental factors stably predict each species?
+# [[04-why-plankton.html]]
+
+# *** Question: What environmental factors stably predict each species?
+# [[04-why-microbe.html]]
+
 
 ** 
 [[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/flowmixapp/blob/main/02-estimate.html][02-estimate.html]]
