@@ -1,0 +1,33 @@
+#+title: Statistical analysis of microbial data from many oceanographic cruises
+
+
+** Summary
+This repository contains the workflow for analyzing microbial data (measured by
+flow cytometry) from multiple oceanographic cruises, using the flowmix model
+([[https://arxiv.org/abs/2008.11251][preprint]] and [[https://github.com/sangwon-hyun/flowmix][software]]).
+
+The Seaflow project at the University of Washington generated the flow cytometry
+data ([[https://seaflow.netlify.app/][website]]):
+#+ATTR_HTML: :style margin-left: auto; margin-right: auto;
+[[./seaflow-map.png]]
+
+Environmental data comes from the Simons CMAP database [[https://simonscmap.com/]].
+
+** Installation and usage
+The scripts named e.g. ~00-covariates.Rmd~ are to be run in order of the numbers
+on the filenames. The relevant data files and outputs are placed in an
+identically named directory called ~00-covariates~.
+
+** Structure
+
+*** Obtaining and cleaning covariates:
+[[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/flowmixapp/blob/main/00-covariates.html][00-covariates.html]]
+
+*** Obtaining cytograms:
+[[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/flowmixapp/blob/main/01-cytograms.html][01-cytograms.html]]
+
+*** Estimate flowmix model on many cruises:
+[[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/flowmixapp/blob/main/02-estimate.html][02-estimate.html]]
+
+** 
+[[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/flowmixapp/blob/main/02-estimate.html][02-estimate.html]]
