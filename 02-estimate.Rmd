@@ -43,7 +43,7 @@ if(!dir.exists(outputdir)) dir.create(outputdir)
 
 # Summary
 
-This document compiles and showcases the estimated models -- results from
+This document compiles and showcases the estimated models, which are from
 large-scale computation that occurred in a server.
 
 The experiments were done using these settings:
@@ -186,11 +186,9 @@ for(cruise_id in all_cruise_id){
                             labels = cluster_labels,
                             colours = c("white", "blue"),
                             cruise_id = cruise_id)
-
+    
     ## Save one for the books
     if(tt == 1){
-      ## oneplotfile = file.path(datadir, cruise_id, "viz", paste0(tt, ".jpeg"))
-      ## ggsave(file = oneplotfile, width = 12, height = 4, units = "in", dpi = 300, g)
       plot(g)
     }
 
@@ -221,21 +219,12 @@ for(cruise_id in all_cruise_id){
                videofile,
                '" type="video/mp4"> </video>'))
   }
-
-  ## ## Instead, we'll just embed one frame
-  ## cat(paste0("![](", file.path(".", 
-  ##                              "data",
-  ##                              "02-estimate",
-  ##                              cruise_id,
-  ##                              "viz",
-  ##                              "1.jpeg"),
-             ## ")"))
   cat('\n\n')
 }
 ```
  
 
-# Estimated $\alpha and $\beta$ coefficients {.tabset}
+# Estimated $\alpha$ and $\beta$ coefficients {.tabset}
 
 ```{r viz_coef, fig.width=12, fig.height=12, results='asis'}
 ## These are the original /ordered/ labels
@@ -459,7 +448,7 @@ for(cruise_id in all_cruise_id){
 ```
 
 
-# Make three data frames
+# Make long-format data tables
 
 Now, we'll be making several "long format" data tables -- of the data and of the
 model estimates -- to use for further data analysis.
@@ -472,19 +461,19 @@ The objects are called:
 
 * `sigma_long`: Covariance ($\Sigma$) estimates.
 
-* `X_long`: Environmental covariates.
+* `X_long`: Environmental covariates $X$.
 
-* `dat_long`: Binned cytometry data.
+* `dat_long`: Binned cytometry data $y$.
 
 
 **Coefficients (and stability).** The columns are:
 
-  + cruise
-  + "variable": covariate (can also be "intercept")
-  + population
-  + type ("beta_diam", "beta_chl", "beta_pe", "alpha")
-  + coefficient (the value)
-  + stability (the value)
+  + cruise_id
+  + variable: environmental covariate (includes "intp")
+  + population: phytoplankton species
+  + type: `beta_diam`, `beta_chl`, `beta_pe`, or `alpha`
+  + coef: coefficient estimate 
+  + stability: stability estimate
 
 
 
@@ -579,20 +568,18 @@ coef_long = lapply(all_cruise_id, function(cruise_id){
 }) %>% bind_rows() 
 coef_long = coef_long %>% select(cruise_id, variable, population, type, coef, stab)
 saveRDS(coef_long, file = file.path(outputdir, "coef_long_main.RDS"))
-print(coef_long)
 coef_long %>% head(20) %>% knitr::kable(caption = "Estimated coefficients in long format.")
 ```
 
 **Predictions.** The columns are:
 
- + cruise
+ + cruise_id
  + time
  + lon
  + lat
  + population
- + type ("mu_diam", "mu_chl", "mu_pe", "pi")
- + value (the value)
- 
+ + type: `mu_diam`, `mu_chl`, `mu_pe`, or `pi`
+ + value
 
 
 ```{r pred_long}
@@ -649,7 +636,7 @@ pred_long %>% head(20) %>% knitr::kable(caption = "Predicted mean and abundance 
 
 **Covariance matrix.** The columns are:
 
- + cruise
+ + cruise_id
  + population
  + name: `"sigma_1_1"` means the (1,1)'th entry of the covariance matrix.
  + value: the value of the covariance matrix entry
@@ -695,7 +682,7 @@ pred_long %>% head(20) %>% knitr::kable(caption = "Estimated covariance matrix i
 
 **Covariates.** The columns are:
 
-  + cruise
+  + cruise_id
   + time
   + covariate
   + value
@@ -731,12 +718,15 @@ saveRDS(X_long, file = file.path(outputdir, "X_long_main.RDS"))
 X_long %>% head(20) %>% knitr::kable(caption = "Environmental covariates in long format.")
 ```
 
-**Data** A long matrix of binned data with the columns.
+**Data.** A long matrix of binned data with the columns:
 
-+ date/time
 + cruise_id
-+ diam & chl & pe & biomass (for each bin that has nonzero data)
++ time
++ diam & chl & pe: the coordinates in cytogram space, for each bin that has
+  nonzero data.
 + counts: biomass in that bin
+
+(This code block is too memory-intensive and is not evaluated; see `dat_long_main.RDS` for the output)
 
 ```{r dat_long, eval = FALSE}
 dat_list = sapply(all_cruise_id, function(cruise_id){
@@ -750,13 +740,12 @@ dat_list = sapply(all_cruise_id, function(cruise_id){
 }, simplify = FALSE, USE.NAMES = TRUE)
 dat_long = dat_list %>% bind_rows(.id = "cruise_id")
 dat_long = dat_long %>% mutate(time = lubridate::as_datetime(time))
-dat_long %>% object.size() %>% format("Mb")
 saveRDS(dat_long, file = file.path(outputdir, "dat_long_main.RDS"))
 dat_long %>% head(20) %>% knitr::kable(caption = "Binned cytometry data in long format.")
 ```
 
-```{r knit-exit}
-knitr::knit_exit()
+```{r knit-exit, eval = TRUE}
+knitr::knit_exit() 
 ```
 
 
