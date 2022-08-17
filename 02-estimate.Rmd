@@ -110,7 +110,7 @@ maps =  list(KM1508  = c(pro = c(10,NA), small = 9,  syn = 7,  pico1_ = c(6  ), 
              KOK1606 = c(pro = c( 9,NA), small =NA,  syn =10,  pico1_ = c(5  ), pico2_ = c(8,NA), pico3_ = c(7),  pico4_ = c(NA), croco =NA, bead =  4, rest1_ = c(1,NA), rest2_ = c(6), bg = c(3,2)),
              KOK1607 = c(pro = c(10,NA), small = 8,  syn = 9,  pico1_ = c(4  ), pico2_ = c(3,NA), pico3_ = c(NA), pico4_ = c(NA), croco =NA, bead =  5, rest1_ = c(6, 7), rest2_ = c(1), bg = c(2)),
              KOK1608 = c(pro = c(10,NA), small =NA,  syn =NA,  pico1_ = c(3  ), pico2_ = c(5, 1), pico3_ = c(NA), pico4_ = c(NA), croco = 2, bead =  4, rest1_ = c(6, 7), rest2_ = c(9), bg = c(8)),
-             KOK1609 = c(pro = c( 7,NA), small =NA,  syn = 5,  pico1_ = c(3  ), pico2_ = c(1,NA), pico3_ = c(NA), pico4_ = c(NA), croco = 4, bead = NA, rest1_ = c(9, 2), rest2_ = c(6), bg = c(10,8)),
+             KOK1609 = c(pro = c( 7,NA), small =NA,  syn = 5,  pico1_ = c(1  ), pico2_ = c(3,NA), pico3_ = c(NA), pico4_ = c(NA), croco = 4, bead = NA, rest1_ = c(9, 2), rest2_ = c(6), bg = c(10,8)),
 
              ## Non-pilot cruises go here.
              MGL1704 = c(pro = c(10,NA), small =NA,  syn = 3,  pico1_ = c(9  ), pico2_ = c(1,NA), pico3_ = c( 6), pico4_ = c(NA), croco =NA, bead = NA, rest1_ = c(4, 7), rest2_ = c(8), bg = c(5, 2)),
@@ -195,19 +195,19 @@ for(cruise_id in all_cruise_id){
     ## Save one for the books
     filename = paste0("labeled-", tt, ".png")
     plotfile = file.path(file.path(outputdir, cruise_id, "viz"), filename)
-    if(file.exists(plotfile)) next
+    ## if(file.exists(plotfile)) next
     ggsave(file = plotfile,
            width = 12, height = 4,
            units = "in", dpi = 300, g)
-  }
+  ## }
 
   ## Make video
   videofile = file.path(outputdir, cruise_id, "viz", "3d-model.mp4")
-  if(!file.exists(videofile)){
+  ## if(!file.exists(videofile)){
     cmd_change_directory <- paste0("cd ", file.path(file.path(outputdir, cruise_id, "viz")))
     cmd_make_movie <- "ffmpeg -y -framerate 3 -i labeled-%d.png  3d-model.mp4"
     system(paste0(cmd_change_directory, "; ", cmd_make_movie))
-  }
+  ## }
 
   ## Plot cluster probabilities
   times = names(ylist)

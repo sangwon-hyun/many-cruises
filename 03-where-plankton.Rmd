@@ -1,0 +1,434 @@
+---
+title: Where does each species live?
+date: "Compiled at `r format(Sys.time(), '%Y-%m-%d %H:%M:%S', tz = 'UTC')` UTC"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+---
+
+```{r global_options, include=TRUE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(fig.width=14, fig.height=8, echo=TRUE, eval=TRUE, cache=TRUE,
+                      warning=FALSE, message=FALSE,
+                      cache.lazy = FALSE)
+
+## Load packages
+library(tidyverse)
+library(knitr)
+library(here)
+library(ggplot2)
+library(gridExtra)
+library(flowmix)
+source("03-helpers.R")
+
+
+## Setup some plotting details
+coul <- colorRampPalette(RColorBrewer::brewer.pal(8, "RdYlBu"))(25)
+## source("03-helpers.R")
+
+## Some extra stuff, from: https://github.com/haozhu233/kableExtra/issues/265 
+options(kableExtra.auto_format = F)
+```
+
+ 
+```{r directories}
+## Setup locations
+base = "03-where-plankton"
+here::i_am("03-where-plankton.Rmd")
+knitr::opts_chunk$set(fig.path = here::here("data", base, 'figures/'))
+outputdir = here::here("data", base)
+datadir = here::here("data", base)
+tables_outputdir = here::here("data", "02-estimate")
+cytograms_outputdir = here::here("data", "01-cytograms")
+if(!dir.exists(outputdir)) dir.create(outputdir)
+```
+
+```{r data-setup}
+pred_long_orig = readRDS(file = file.path(tables_outputdir, "pred_long_main.RDS"))
+
+## Load the lons/lats
+all_cruise_id = c("KM1508", "KM1512", "KM1513", "KOK1515", "KM1518", "KM1601",
+                  "KM1602", "KOK1604", "KOK1606", "KOK1607", "KOK1608",
+                  "KOK1609") 
+spacetimes = lapply(all_cruise_id, function(cruise_id){
+  ybin_obj = readRDS(file.path(cytograms_outputdir, cruise_id, "data", paste0(cruise_id, "-datobj.RDS")))
+  tibble(cruise_id = cruise_id,
+         time = ybin_obj$time,
+         lon = ybin_obj$lon,
+         lat = ybin_obj$lat)
+}) %>% bind_rows()
+
+## Add lon/lat to pred_long
+pred_long = full_join(pred_long_orig, spacetimes)
+
+## Only look at phytoplankton
+phytopops = pred_long %>% pull(population) %>% unique() %>% grep(c("pro|syn|pico|croco"), ., value = TRUE)
+pred_long = pred_long %>% dplyr::filter(population %in% phytopops)
+
+
+## Collapse (1) pro1 and pro1_other into pro1.
+## Collapse (2) croco and croco_other into croco.
+## Collapse (3) pro1 and pico1-3 into pico.
+pred_long = pred_long %>% combine_pop("pro1", "pro1")
+pred_long = pred_long %>% combine_pop("croco", "croco")
+pred_long_pico = pred_long %>% combine_pop("pico", "pico") %>% dplyr::filter(population == "pico") 
+pred_long = rbind(pred_long, pred_long_pico)
+
+## Reorder the populations
+populations = pred_long$population %>% unique() %>% sort()
+pred_long = pred_long %>% mutate(population = factor(population, levels = (populations)))
+```
+
+
+
+# Analysis goal
+
+Parse the estimated estimated relative abundance $\pi$ from multiple cruises to
+see where each species lives in the ocean.
+
+# Prochlorococcus abundance
+
+Let's focus on Prochlorococcus, for now. We'll be plotting **spatial averages**
+of the relative abundance.
+
+```{r plot-prochloro-overall, fig.width = 5, fig.height = 7}
+p = pred_long %>%
+  dplyr::filter(population == "pro1" & type == "prob") %>%
+  average_by_space(cutwidth = 1)%>%
+  plot_pipe(jitter_fac = 0, col_limits = c(0,.6)) +
+  ggtitle("Prochloro abundance")
+p + scale_size_continuous(range = rel(3), guide = "none") 
+```
+
+Spatial averages **by cruise** are shown here:
+
+```{r plot-prochloro-by-cruise, fig.width = 15, fig.height = 15}
+p = pred_long %>%
+  dplyr::filter(population == "pro1" & type == "prob") %>%
+  ## Obtain spatial averages /by cruise/
+  split(.$cruise_id) %>%
+  purrr::map_dfr(average_by_space, cutwidth = .5, .id = "cruise_id") %>%
+  plot_pipe(jitter_fac = 0) +
+  ggtitle("Prochloro abundance")
+p + scale_size(range = rel(1), guide = "none") + facet_wrap(~cruise_id, nrow = 3)
+```
+
+Spatial averages **by cruise type** are shown here:
+
+```{r plot-prochloro-by-cruise-type, fig.width = 12, fig.height = 6}
+p = pred_long %>%
+  left_join(tab) %>% 
+  dplyr::filter(population == "pro1" & type == "prob") %>%
+  ## Obtain spatial averages /by cruise/
+  split(.$cruise_type) %>%
+  purrr::map_dfr(average_by_space, cutwidth = .01, .id = "cruise_type") %>%
+  ## plot_pipe(jitter_fac = 0)
+  plot_pipe(jitter_fac = 0, col_limits = c(0,.6)) +
+  ggtitle("Prochloro abundance")
+p + scale_size(range = rel(1), guide = "none") + facet_wrap(~cruise_type, nrow = 1)
+```
+
+
+Now, we focus on latitude only.
+
+* The points are colored by cruise.
+
+* Each panel is a cruise types e.g. HOT, gradients.
+
+```{r plot-avg-prochloro-by-latitude, fig.width = 12, fig.height = 6}
+## Make an overall latitudinal average prob prediction.
+latcut = pred_long %>%
+  dplyr::filter(population == "pro1" & type == "prob") %>%
+  mutate(latcut = ggplot2::cut_width(lat, width = .5)) %>%
+  group_by(latcut) %>%
+  summarize(value = mean(value),
+            lat = mean(lat))
+p = latcut %>% ggplot() +
+  geom_line(aes(x=lat, y = value), size = rel(1), dat = latcut) +
+  geom_point(aes(x=lat, y = value), size = rel(1), dat = latcut) +
+  ggtitle("Average abundance by latitude") + ylab("Abundance") + xlab("Latitude")
+p
+```
+
+What are the individual predictions?
+
+```{r plot-prochloro-by-latitude, fig.width = 12, fig.height = 6}
+## Overlay all points
+ggplot() +
+  geom_point(aes(x = lat, y = value), col = 'yellow',
+             data = pred_long %>% filter(population == "pro1", type == "prob")) +
+  geom_line(aes(x=lat, y = value), size = rel(1), dat = latcut, data = latcut) +
+  ggtitle("Abundance by latitude") + ylab("Abundance") + xlab("Latitude")
+
+## Overlay points and color by cruise ID
+ggplot() +
+  geom_point(aes(x = lat, y = value, col = cruise_id), alpha=1, size = rel(.5), 
+             data = pred_long %>% filter(population == "pro1", type == "prob")) +
+  guides(col = guide_legend(title = "Cruise ID")) +
+  geom_line(aes(x=lat, y = value), size = rel(1), dat = latcut, data = latcut) +
+  ggtitle("Abundance by latitude") + ylab("Abundance") + xlab("Latitude")
+
+## Overlay points and color by cruise type
+ggplot() +
+  geom_point(aes(x = lat, y = value, col = cruise_type), alpha=.2,
+             data = pred_long %>% left_join(tab) %>% filter(population == "pro1", type == "prob")) +
+  guides(col = guide_legend(title = "Cruise type")) +
+  geom_line(aes(x=lat, y = value), size = rel(1), dat = latcut, data = latcut) +
+  ggtitle("Abundance by latitude") + ylab("Abundance") + xlab("Latitude")
+```
+
+Now, make one panel for each cruise type.
+
+```{r plot-prochloro-cruisetype, fig.width = 20, fig.height = 10, eval = TRUE}
+## Overlay points and color by cruise type
+ggplot() +
+  geom_point(aes(x = lat, y = value, col = cruise_type), alpha=.2,
+             data = pred_long %>% left_join(tab) %>% filter(population == "pro1", type == "prob")) +
+  guides(col = guide_legend(title = "Cruise type")) +
+  facet_wrap(~cruise_type) +
+  geom_line(aes(x=lat, y = value), size = rel(1), dat = latcut, data = latcut) +
+  ggtitle("Abundance by latitude") + ylab("Abundance") + xlab("Latitude")
+```
+
+```{r plot-prochloro-cruisetype-zoomin, fig.width = 20, fig.height = 10, eval = TRUE}
+cts = tab$cruise_type %>% unique() %>% sort()
+glist = lapply(cts, function(ct){
+## ct = "hot"
+## ct = "hot"
+dt = pred_long %>% 
+  left_join(tab) %>% 
+  filter(population == "pro1", type == "prob", cruise_type == ct)
+rng = dt %>% pull(lat) %>% range()
+  ylim = c(0, 0.7)
+p = ggplot(dt) +
+  geom_point(aes(x = lat, y = value, group = cruise_id, col = cruise_id)) +
+  facet_wrap(~cruise_type) +
+  ylim(ylim) +
+  xlab("Latitude") + ylab("Abundance") +
+  guides(col = guide_legend(title = "Cruise ID")) +
+  ## Add the overall latitudinal prob average
+  geom_line(aes(x=lat, y = value), size = rel(1), dat = latcut %>% filter(lat > rng[1] - .5 & lat < rng[2]+.5))
+  return(p)
+})
+do.call("grid.arrange", glist)
+```
+
+If we just focus on the gradients(-ish) cruises:
+
+```{r plot-prochloro-gradients, fig.width = 15, fig.height = 10}
+p =
+  pred_long %>%
+  left_join(tab) %>%
+  filter(population == "pro1", type == "prob", cruise_type == "gradients") %>%
+  ggplot() +
+  geom_point(aes(x = lat, y = value, group = cruise_id, col = cruise_id)) +
+  xlab("Latitude") + ylab("Abundance") +
+  guides(col = guide_legend(title = "Cruise ID")) +
+  ## Add the overall latitudinal prob average 
+  geom_line(aes(x=lat, y = value), size = rel(1), dat = latcut ) +
+  facet_wrap(~cruise_id, nrow = 1) 
+```
+
+We see that, where the trajectories overlap, the three cruises agree quite
+well. The trajectory for KM1713 differs substantially in the first part of the
+cruise (which puts it in different nutrient conditions), which might be why the
+KM1713's Synechococcus abundance is lower in latitudes below 30:
+
+```{r plot-KM1713, fig.width = 7, fig.height = 5}
+p =
+  pred_long %>%
+  filter(population == "pro1", type == "prob", cruise_id == "KM1713") %>%
+  ggplot() +
+  geom_point(aes(x = lat, y = value, group = cruise_id, col = cruise_id)) +
+  xlab("Latitude") + ylab("Abundance") +
+  guides(col = guide_legend(title = "Cruise ID")) +
+  ## Add the overall latitudinal prob average 
+  geom_line(aes(x=lat, y = value), size = rel(1), dat = latcut)
+p
+
+```
+
+```{r plot-trajectory-gradients, fig.width = 5, fig.height = 8}
+p = pred_long %>%
+  left_join(tab) %>%
+  filter(population == "pro1", type == "prob", cruise_type == "gradients") %>%
+  ggplot() +
+  geom_point(aes(x = lon, y = lat, group = cruise_id, col = cruise_id)) +
+  xlab("Latitude") + ylab("Abundance") +
+  guides(col = guide_legend(title = "Cruise ID")) +
+  coord_map("azequalarea", orientation = c(-36.92, 200, 0)) +
+  annotation_map(map_data("world"), fill = "antiquewhite", colour = "darkgrey") 
+p
+```
+
+# Synecho & Croco abundance
+
+We repeat this exercise for Synechococcus (and Croco) now.
+
+```{r fig.height = 8, fig.width = 6}
+pop = "syn"
+p1 = pred_long %>%
+  left_join(tab) %>% 
+  dplyr::filter(population == pop & type == "prob") %>%
+  average_by_space(cutwidth = .5)%>%
+  plot_pipe(jitter_fac = 0) +
+  ggtitle("Synechococcus abundance")  +
+  scale_size(range = rel(3), guide = "none")
+
+pop = "croco"
+p2 = pred_long %>%
+  left_join(tab) %>% 
+  dplyr::filter(population == pop & type == "prob") %>%
+  average_by_space(cutwidth = 1)%>%
+  plot_pipe(jitter_fac = 0) +
+  ggtitle("Crocosphaera abundance")  +
+  scale_size_continuous(range = rel(3), guide = "none")
+
+do.call("grid.arrange", list(p1, p2, nrow=1))
+```
+
+Synechococcus is 
+
+(1) less abundant near the shore and up north, and
+(2) more abundant in the middle.
+
+Croco is more abundant in southern waters, and less abundant in northern waters.
+
+Let's now focus on Synechococcus, and facet by cruise.
+
+```{r, fig.width = 12, fig.height = 5}
+pop = "syn"
+p = pred_long %>%
+  left_join(tab) %>% 
+  dplyr::filter(population == pop & type == "prob") %>%
+  ## Obtain spatial averages /by cruise/
+  split(.$cruise_id) %>%
+  purrr::map_dfr(average_by_space, cutwidth = .1, .id = "cruise_id") %>%
+  plot_pipe(jitter_fac = 0, col_limits = c(0,.6)) +
+  ggtitle("Synecho abundance")
+p + scale_size_continuous(range = rel(1), guide = "none") + facet_wrap(~cruise_id, nrow = 1)
+```
+We'll focus on the two gradients cruises now.
+
+It's important (and comforting) that Synecho relative abundance is *consistent*
+on the two segments of the trip -- the way up, and the way down.
+
+```{r synecho-gradients, fig.width = 8, fig.height=10}
+pred_long %>%
+  dplyr::filter(population == "syn" & type == "prob", cruise_id == "MGL1704") %>%
+  mutate(segment = ifelse(time <= "2017-06-03 16:00:00", "up", "down")) %>%
+  mutate(segment = factor(segment, levels=c("up", "down"))) %>% 
+  plot_pipe(jitter_fac = 1) +
+  facet_wrap(~segment, nrow = 1) +
+  xlim(c(-155, -160)) +
+  ggtitle("Synecho abundance in MGL1704")
+
+pred_long %>%
+  dplyr::filter(population == "syn" & type == "prob", cruise_id == "KOK1606") %>%
+  mutate(segment = ifelse(time <= "2016-04-26 22:00:00", "up", "down")) %>%
+  mutate(segment = factor(segment, levels=c("up", "down"))) %>% 
+  plot_pipe(jitter_fac = 1) +
+  facet_wrap(~segment, nrow = 1) +
+  xlim(c(-155, -160)) +
+  ggtitle("Synecho abundance in KOK1606")
+```
+
+```{r synecho-gradients-updown, fig.width = 8, fig.height = 5}
+pred_long %>%
+  dplyr::filter(population == "syn" & type == "prob", cruise_id == "MGL1704") %>%
+  mutate(segment = ifelse(time <= "2017-06-03 16:00:00", "up", "down")) %>%
+  mutate(segment = factor(segment, levels = c("up", "down"))) %>%
+  ggplot() +
+  geom_point(aes(x=lat, y=value, col = segment)) +
+  ggtitle("Synecho abundance in MGL1704") + ylab("Abundance") + xlab("Latitude")
+
+pred_long %>%
+  dplyr::filter(population == "syn" & type == "prob", cruise_id == "KOK1606") %>%
+  mutate(segment = ifelse(time <= "2016-04-26 22:00:00", "up", "down")) %>%
+  mutate(segment = factor(segment, levels = c("up", "down"))) %>%
+  ggplot() +
+  geom_point(aes(x=lat, y=value, col = segment)) +
+  ## geom_line(aes(x=lat, y=value, col = segment)) +
+  ggtitle("Synecho abundance in KOK1606") + ylab("Abundance") + xlab("Latitude")
+```
+
+Next, we visualize the latitude-wise trend in Synechococcus abundance by (1)
+cruise ID, and (2) cruise type.
+
+```{r synecho-gradients-by-latitude, fig.width = 10, fig.height = 6}
+latcut = pred_long %>%
+  dplyr::filter(population == "syn" & type == "prob") %>%
+  mutate(latcut = ggplot2::cut_width(lat, width = .5)) %>%
+  group_by(latcut) %>%
+  summarize(value = mean(value),
+            lat = mean(lat))
+
+pred_long %>%
+  left_join(tab) %>% 
+  dplyr::filter(population == "syn" & type == "prob") %>%
+  ggplot() +
+  geom_point(aes(x = lat, y = value, col = cruise_id)) +
+  ggtitle("Synecho abundance, by cruise") + ylab("Abundance") + xlab("Latitude") +
+  geom_line(aes(x = lat, y =value), dat = latcut, size = rel(2))
+
+pred_long %>%
+  left_join(tab) %>% 
+  dplyr::filter(population == "syn" & type == "prob") %>%
+  ggplot() +
+  geom_point(aes(x = lat, y = value, col = cruise_type)) +
+  ggtitle("Synecho abundance, by cruise type") + ylab("Abundance") + xlab("Latitude") +
+  geom_line(aes(x = lat, y =value), dat = latcut, size = rel(2))
+```
+
+The two gradients cruises have similar *peak heights* (this is good) but the
+latitude where the peaks occur differ quite a bit.  (KM1713 also went far up
+north and down, but didn't have any Synechococcus detected; "bg" seems to be
+where synecho usually is.)
+
+
+```{r, fig.width = 7, fig.height = 5}
+pred_long %>%
+  left_join(tab) %>% 
+  dplyr::filter(population == "syn" & type == "prob"& cruise_type == "gradients") %>%
+  ggplot() +
+  geom_point(aes(x = lat, y = value, col = cruise_id)) +
+  ggtitle("Synecho abundance") + ylab("Abundance") + xlab("Latitude")
+```
+
+Why is this? The Transition zone actually migrates (fluctuates) seasonally, so
+it's natural to find *seasonal variation* in the latitude at which the
+Synechoccus thrives the most! (While there is also a temporal difference --
+KOK1606 ran in late April and MGL ran in early June, this is not an important
+distinction -- I'm told this is unimportant, and the main factor is a difference
+in environmental conditions!)
+
+Next up:
+
+* Among HOT cruises, what does the data (covariates) say about the why they
+  differ?
+
+* Focus on environmental conditions and coefficients.
+
+* Why are HOT cruises so variable?
+
+* Incorporate gradients3 into the analysis.
+
+
+```{r stop-eval, eval = TRUE}
+knitr::knit_exit()   
+```
+
+
+<!-- ```{r colors} -->
+<!-- ## colormap = setNames(RColorBrewer::brewer.pal(, "Set1") %>% adjustcolor(alpha = 0.5), nms) -->
+<!-- colormap = c()  -->
+<!-- colormap["light"] = "darkgoldenrod1" -->
+<!-- colormap["phys"] = "firebrick" -->
+<!-- colormap["bio"] = "springgreen4" -->
+<!-- colormap["chem"] = "royalblue4" -->
+<!-- colormap_small = colormap -->
+<!-- colormap["all"] = "black" -->
+<!-- colormap_ratio = colormap_small -->
+<!-- names(colormap_ratio) = paste0(names(colormap_small), "_ratio") -->
+<!-- ``` -->
