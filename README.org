@@ -32,12 +32,14 @@ identically named directory called ~00-covariates~.
 *** Question: Where does each species live?
 [[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/many-cruises/blob/main/03-where-plankton.html][03-where-plankton.html]]
 
-# *** Question: What environmental factors stably predict each species?
-# [[04-why-plankton.html]]
+*** Question: What environmental factors stably predict each species?
+[[04-why-plankton.html]]
 
 # *** Question: What environmental factors stably predict each species?
 # [[04-why-microbe.html]]
 
 
-** 
-[[http://htmlpreview.github.io/?https://github.com/sangwon-hyun/flowmixapp/blob/main/02-estimate.html][02-estimate.html]]
+** Other internal resources
+
+This [[https://docs.google.com/spreadsheets/d/18a_zdih6SvlwumxWc2IUaJSUYS7CbKcVwW_14j630Sc/edit?usp=sharing][spreadsheet]] lists all the cruises -- including notes about analysis results, etc.
+
